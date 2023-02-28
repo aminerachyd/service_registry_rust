@@ -7,7 +7,10 @@ use std::{
     time::Duration,
 };
 
-use crate::events::{ProcessEvent, RegistryEvent};
+use crate::{
+    events::{ProcessEvent, RegistryEvent},
+    P2PSend,
+};
 
 pub struct Process {
     id: u32,
@@ -16,9 +19,7 @@ pub struct Process {
     registered_processes: HashMap<u32, String>,
 }
 
-fn log(str: &str) {
-    println!("[Process] {}", str);
-}
+impl P2PSend for Process {}
 
 impl Process {
     pub fn new() -> Self {
@@ -83,12 +84,20 @@ impl Process {
                     id,
                     registered_processes,
                 } => {
-                    // FIXME update these
                     self.id = id;
                     self.registered_processes = registered_processes;
                     log(&format!(
                         "Connected to registry, given id: {}\n Registered processes {:?}",
                         self.id, self.registered_processes
+                    ));
+                }
+                RegistryEvent::UPDATE_REGISTERED_PROCESSES {
+                    registered_processes,
+                } => {
+                    self.registered_processes = registered_processes;
+                    log(&format!(
+                        "Updating registered processes: {:?}",
+                        self.registered_processes
                     ));
                 }
             }
@@ -105,15 +114,12 @@ impl Process {
             exit(1);
         }
     }
-
-    fn process_is_alive(addr: String) -> bool {
-        match TcpStream::connect(addr) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
-    }
 }
 
 fn handle_buffer(buffer: [u8; 1000], data_size: usize) -> Option<RegistryEvent> {
     RegistryEvent::parse_bytes(&buffer[..data_size])
+}
+
+fn log(str: &str) {
+    println!("[Process] {}", str);
 }

@@ -1,13 +1,16 @@
 use std::{
     collections::HashMap,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    io::Read,
+    net::TcpListener,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
-use crate::events::{ProcessEvent, RegistryEvent};
+use crate::{
+    events::{ProcessEvent, RegistryEvent},
+    Broadcast, P2PSend,
+};
 
 type Processes = Arc<Mutex<HashMap<u32, String>>>;
 type AMu32 = Arc<Mutex<u32>>;
@@ -16,19 +19,12 @@ pub struct Registry {
     processes: Processes,
     last_registered_id: AMu32,
 }
-
-fn log(str: &str) {
-    println!("[Registry] {}", str);
-}
-
-fn handle_buffer(buffer: [u8; 1000], data_size: usize) -> Option<ProcessEvent> {
-    ProcessEvent::parse_bytes(&buffer[..data_size])
-}
+impl P2PSend for Registry {}
+impl Broadcast for Registry {}
 
 impl Registry {
-    pub fn new(addr: &String) -> Self {
-        let mut processes = HashMap::new();
-        processes.insert(0, addr.to_owned());
+    pub fn new() -> Self {
+        let processes = HashMap::new();
         Registry {
             last_registered_id: Arc::new(Mutex::new(0)),
             processes: Arc::new(Mutex::new(processes)),
@@ -44,6 +40,13 @@ impl Registry {
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(5));
             Registry::send_heartbeat(&mut processes);
+        });
+
+        // Thread to broadcast the processes table
+        let mut processes = Arc::clone(&self.processes);
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(5));
+            Registry::broadcast_registered_processes(&mut processes);
         });
 
         for stream in listener.incoming() {
@@ -89,7 +92,6 @@ impl Registry {
     }
 
     fn register_process(addr: String, processes: &mut HashMap<u32, String>, last_id: &mut u32) {
-        let mut stream = TcpStream::connect(&addr).unwrap();
         let next_id = *last_id + 1;
         processes.insert(next_id, addr.clone());
         *last_id = next_id;
@@ -100,7 +102,19 @@ impl Registry {
             registered_processes: processes.clone(),
         }
         .as_bytes_vec()[..];
-        stream.write(registry_event).unwrap();
+
+        Registry::send(&addr, registry_event).unwrap();
+    }
+
+    fn broadcast_registered_processes(processes: &mut Processes) {
+        log("Sending updated table of processes");
+        let processes = &*(processes.lock().unwrap());
+        let registry_event = &RegistryEvent::UPDATE_REGISTERED_PROCESSES {
+            registered_processes: processes.clone(),
+        }
+        .as_bytes_vec()[..];
+
+        Registry::broadcast_to_all(&processes, registry_event);
     }
 
     fn send_heartbeat(processes: &mut Processes) {
@@ -110,7 +124,7 @@ impl Registry {
         let processes = &mut processes.lock().unwrap();
 
         processes.iter().for_each(|(id, addr)| {
-            if Registry::process_is_alive(addr) {
+            if Registry::process_is_alive(addr.to_owned()) {
                 log(&format!("Process at {} is alive", addr));
             } else {
                 log(&format!("Process at {} is dead, removing it...", addr));
@@ -122,11 +136,12 @@ impl Registry {
             processes.remove(&id);
         });
     }
+}
 
-    fn process_is_alive(addr: &String) -> bool {
-        match TcpStream::connect(addr) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
-    }
+fn log(str: &str) {
+    println!("[Registry] {}", str);
+}
+
+fn handle_buffer(buffer: [u8; 1000], data_size: usize) -> Option<ProcessEvent> {
+    ProcessEvent::parse_bytes(&buffer[..data_size])
 }
