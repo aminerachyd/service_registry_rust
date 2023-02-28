@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -7,7 +9,10 @@ pub enum ProcessEvent {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryEvent {
-    REGISTERED { id: u32 },
+    REGISTERED {
+        id: u32,
+        registered_processes: HashMap<u32, String>,
+    },
 }
 
 impl RegistryEvent {
@@ -16,6 +21,8 @@ impl RegistryEvent {
     }
 
     pub fn parse_bytes(bytes: &[u8]) -> Option<RegistryEvent> {
+        let str = String::from_utf8(bytes.to_vec()).unwrap();
+        println!("{}", str);
         match RegistryEvent::deserialize(bytes.to_vec()) {
             Ok(registry_event) => Some(registry_event),
             Err(_) => None,
