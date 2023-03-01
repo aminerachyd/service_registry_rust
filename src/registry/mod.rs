@@ -114,7 +114,12 @@ impl Registry {
         }
         .as_bytes_vec()[..];
 
-        Registry::send(&addr, registry_event).unwrap();
+        match Registry::send(&addr, registry_event) {
+            Ok(_) => {}
+            _ => {
+                log(&format!("Couldn't reach process {}", &addr));
+            }
+        };
     }
 
     fn broadcast_registered_processes(processes: &mut Processes) {

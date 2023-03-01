@@ -1,10 +1,5 @@
 use std::{
-    collections::HashMap,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    process::exit,
-    thread,
-    time::Duration,
+    collections::HashMap, io::Read, net::TcpListener, process::exit, thread, time::Duration,
 };
 
 use crate::{
@@ -68,12 +63,17 @@ impl Process {
 
     fn connect_to_registry(&self, registry_address: String) {
         log("Connecting to registry...");
-        let mut stream = TcpStream::connect(registry_address).unwrap();
         let connect_event = &ProcessEvent::CONNECT {
             port: self.port.clone(),
         }
         .as_bytes_vec()[..];
-        stream.write(connect_event).unwrap();
+        match Process::send(&registry_address, connect_event) {
+            Ok(_) => {}
+            _ => {
+                log("Couldn't reach registry, exiting");
+                exit(1);
+            }
+        }
     }
 
     fn handle_registry_event(&mut self, registry_event: Option<RegistryEvent>) {
@@ -114,7 +114,7 @@ impl Process {
             log("Registry is alive");
         } else {
             log("Registry is dead, exiting");
-            exit(1);
+            exit(0);
         }
     }
 }

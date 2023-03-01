@@ -2,7 +2,7 @@ mod events;
 mod process;
 mod registry;
 
-use std::{collections::HashMap, io::Write, net::TcpStream};
+use std::{collections::HashMap, io::Write, net::TcpStream, time::Duration};
 
 use process::Process;
 use registry::Registry;
@@ -16,8 +16,9 @@ pub fn start_process(port: u32, registry_address: String) -> std::io::Result<()>
 }
 
 trait P2PSend {
+    const TIMEOUT: Duration = Duration::from_secs(10);
     fn send(to_addr: &String, buffer: &[u8]) -> std::io::Result<usize> {
-        let mut stream = TcpStream::connect(to_addr).unwrap();
+        let mut stream = TcpStream::connect_timeout(&to_addr.parse().unwrap(), Self::TIMEOUT)?;
 
         stream.write(buffer)
     }
