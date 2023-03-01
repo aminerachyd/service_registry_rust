@@ -8,7 +8,7 @@ fn main() {
     let mut port = 8080;
     let registry_addr = match env::var("REGISTRY_ADDR") {
         Ok(registry_addr) => registry_addr,
-        Err(_) => format!("127.0.0.1:{}", port),
+        Err(_) => format!("0.0.0.0:{}", port),
     };
     // Start registry
     if start_registry(registry_addr.clone()).is_err() {

@@ -35,7 +35,7 @@ impl Process {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port))?;
         log(&format!("Started process on port {}", port));
 
-        self.address = format!("127.0.0.1:{}", port);
+        self.address = format!("0.0.0.0:{}", port);
         self.registry_address = registry_address;
 
         self.connect_to_registry(self.registry_address.clone());
