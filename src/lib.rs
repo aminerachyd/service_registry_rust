@@ -2,7 +2,14 @@ mod events;
 mod process;
 mod registry;
 
-use std::{collections::HashMap, io::Write, net::TcpStream, time::Duration};
+use std::{
+    collections::HashMap,
+    io::Write,
+    net::{TcpStream, ToSocketAddrs},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
 use process::Process;
 use registry::Registry;
@@ -16,15 +23,29 @@ pub fn start_process(port: u32, registry_address: String) -> std::io::Result<()>
 }
 
 trait P2PSend {
-    const TIMEOUT: Duration = Duration::from_secs(10);
+    const TIMEOUT: Duration = Duration::from_secs(5);
     fn send(to_addr: &String, buffer: &[u8]) -> std::io::Result<usize> {
-        let mut stream = TcpStream::connect_timeout(&to_addr.parse().unwrap(), Self::TIMEOUT)?;
+        let (sender, receiver) = mpsc::channel();
 
-        stream.write(buffer)
+        let addr = to_addr.clone();
+        thread::spawn(move || {
+            sender.send(addr.to_socket_addrs().unwrap().next().unwrap());
+        });
+
+        thread::sleep(Self::TIMEOUT);
+
+        match receiver.try_recv() {
+            Ok(addr) => {
+                let mut stream = TcpStream::connect_timeout(&addr, Self::TIMEOUT)?;
+
+                stream.write(buffer)
+            }
+            _ => Err(std::io::ErrorKind::AddrNotAvailable.into()),
+        }
     }
 
     fn process_is_alive(addr: String) -> bool {
-        match TcpStream::connect(addr) {
+        match Self::send(&addr, &[]) {
             Ok(_) => true,
             Err(_) => false,
         }
