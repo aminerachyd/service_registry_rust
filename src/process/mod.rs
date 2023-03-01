@@ -34,7 +34,7 @@ impl Process {
     }
 
     pub fn run(mut self, port: u32, registry_address: String) -> std::io::Result<()> {
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))?;
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
         log(&format!("Started process on port {}", port));
 
         self.address = format!("0.0.0.0:{}", port);
