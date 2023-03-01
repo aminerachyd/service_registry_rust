@@ -2,20 +2,35 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+pub enum Event {
+    ProcessEvent(ProcessEvent),
+    RegistryEvent(RegistryEvent),
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProcessEvent {
-    CONNECT { port: u32 },
+    CONNECT_ON_PORT { id: u32, port: u32 },
+    MESSAGE(String),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryEvent {
     REGISTERED {
-        id: u32,
         registered_processes: HashMap<u32, String>,
     },
-    UPDATE_REGISTERED_PROCESSES {
-        registered_processes: HashMap<u32, String>,
-    },
+    UPDATE_REGISTERED_PROCESSES(HashMap<u32, String>),
+}
+
+impl Event {
+    pub fn parse_event_type(bytes: &[u8]) -> Option<Event> {
+        match ProcessEvent::parse_bytes(bytes) {
+            Some(process_event) => Some(Event::ProcessEvent(process_event)),
+            None => match RegistryEvent::parse_bytes(bytes) {
+                Some(registry_event) => Some(Event::RegistryEvent(registry_event)),
+                None => None,
+            },
+        }
+    }
 }
 
 impl RegistryEvent {

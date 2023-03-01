@@ -33,7 +33,7 @@ fn main() {
                     Err(e) => match e.kind() {
                         ErrorKind::AddrInUse => {
                             port = port + 1;
-                            println!("Trying with {}", port);
+                            println!("Trying with port {}", port);
                             start_process(port, registry_addr.clone());
                             true
                         }
