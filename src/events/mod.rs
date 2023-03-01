@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProcessEvent {
-    CONNECT { addr: String },
+    CONNECT { port: u32 },
 }
 
 #[derive(Serialize, Deserialize, Debug)]

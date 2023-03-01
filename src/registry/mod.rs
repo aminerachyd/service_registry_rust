@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::Read,
-    net::TcpListener,
+    net::{IpAddr, TcpListener},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -58,6 +58,7 @@ impl Registry {
             thread::spawn(move || {
                 let mut stream = stream.unwrap();
                 let data_size = stream.read(&mut buffer).unwrap();
+                let peer_addr = stream.peer_addr().unwrap().ip();
 
                 if data_size > 0 {
                     let process_event = handle_buffer(buffer, data_size);
@@ -65,7 +66,12 @@ impl Registry {
                     let processes = &mut *(processes.lock().unwrap());
                     let last_registered_id = &mut *(last_registered_id.lock().unwrap());
 
-                    Registry::handle_process_event(process_event, processes, last_registered_id);
+                    Registry::handle_process_event(
+                        peer_addr,
+                        process_event,
+                        processes,
+                        last_registered_id,
+                    );
                 }
             });
         }
@@ -73,6 +79,7 @@ impl Registry {
     }
 
     fn handle_process_event(
+        process_addr: IpAddr,
         process_event: Option<ProcessEvent>,
         processes: &mut HashMap<u32, String>,
         last_id: &mut u32,
@@ -83,9 +90,13 @@ impl Registry {
             let process_event = process_event.unwrap();
 
             match process_event {
-                ProcessEvent::CONNECT { addr } => {
-                    log(&format!("Received CONNECT from {}", addr));
-                    Registry::register_process(addr, processes, last_id);
+                ProcessEvent::CONNECT { port } => {
+                    log(&format!("Received CONNECT from {}:{}", process_addr, port));
+                    Registry::register_process(
+                        format!("{}:{}", process_addr, port),
+                        processes,
+                        last_id,
+                    );
                 }
             }
         }

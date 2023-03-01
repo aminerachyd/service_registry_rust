@@ -15,6 +15,7 @@ use crate::{
 pub struct Process {
     id: u32,
     address: String,
+    port: u32,
     registry_address: String,
     registered_processes: HashMap<u32, String>,
 }
@@ -26,6 +27,7 @@ impl Process {
         Process {
             id: 0,
             address: String::from(""),
+            port: 8080,
             registry_address: String::from(""),
             registered_processes: HashMap::new(),
         }
@@ -36,6 +38,7 @@ impl Process {
         log(&format!("Started process on port {}", port));
 
         self.address = format!("0.0.0.0:{}", port);
+        self.port = port;
         self.registry_address = registry_address;
 
         self.connect_to_registry(self.registry_address.clone());
@@ -67,7 +70,7 @@ impl Process {
         log("Connecting to registry...");
         let mut stream = TcpStream::connect(registry_address).unwrap();
         let connect_event = &ProcessEvent::CONNECT {
-            addr: self.address.clone(),
+            port: self.port.clone(),
         }
         .as_bytes_vec()[..];
         stream.write(connect_event).unwrap();
