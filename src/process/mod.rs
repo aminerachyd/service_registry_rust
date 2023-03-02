@@ -12,7 +12,7 @@ use rand::Rng;
 
 use crate::{
     events::{Event, ProcessEvent, RegistryEvent},
-    handle_buffer, P2PSend,
+    handle_buffer, Broadcast, P2PSend,
 };
 
 type Processes = Arc<Mutex<HashMap<u32, String>>>;
@@ -27,6 +27,7 @@ pub struct Process {
 }
 
 impl P2PSend for Process {}
+impl Broadcast for Process {}
 
 impl Process {
     pub fn new() -> Self {
@@ -61,12 +62,19 @@ impl Process {
         // Periodically send a message to a random process
         let arc_registered_processes = Arc::clone(&mut self.registered_processes);
         thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(20));
+            let registered_processes = &*arc_registered_processes.lock().unwrap();
+
+            Process::send_to_random_process(registered_processes);
+        });
+
+        // Periodically broadcast a message to all processes
+        let arc_registered_processes = Arc::clone(&mut self.registered_processes);
+        thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(5));
             let registered_processes = &*arc_registered_processes.lock().unwrap();
 
-            if registered_processes.len() > 0 {
-                Process::send_to_random_process(registered_processes);
-            }
+            Process::broadcast_to_processes(registered_processes);
         });
 
         for stream in listener.incoming() {
@@ -155,7 +163,7 @@ impl Process {
 
             match process_event {
                 ProcessEvent::MESSAGE { from, msg } => {
-                    log(&format!("Received from {} message: {}", from, msg));
+                    log(&format!("Received from {}: {}", from, msg));
                 }
                 _ => {}
             }
@@ -197,7 +205,7 @@ impl Process {
 
             let message_event = &ProcessEvent::MESSAGE {
                 from: self_id,
-                msg: format!("Hello from {}", self_id),
+                msg: "P2P message".to_owned(),
             }
             .as_bytes_vec()[..];
             match Process::get_process_addr(process_id, processes) {
@@ -208,6 +216,24 @@ impl Process {
                     log(&format!("Process {} doesn't exist", process_id));
                 }
             }
+        }
+    }
+
+    fn broadcast_to_processes(processes: &HashMap<u32, String>) {
+        if processes.len() > 1 {
+            let self_id = std::process::id();
+            let processes: HashMap<u32, String> = processes
+                .iter()
+                .filter(|(&k, _)| k != self_id)
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect();
+
+            let broadcast_message = &ProcessEvent::MESSAGE {
+                from: self_id,
+                msg: "Broadcast message".to_owned(),
+            }
+            .as_bytes_vec()[..];
+            Process::broadcast_to_all(&processes, broadcast_message);
         }
     }
 }
