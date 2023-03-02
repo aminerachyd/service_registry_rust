@@ -25,6 +25,7 @@ pub fn start_process(port: u32, registry_address: String) -> std::io::Result<()>
 
 trait P2PSend {
     const TIMEOUT: Duration = Duration::from_secs(5);
+
     fn send(to_addr: &String, buffer: &[u8]) -> std::io::Result<usize> {
         let (sender, receiver) = mpsc::channel();
 

@@ -121,32 +121,37 @@ impl Registry {
     }
 
     fn broadcast_registered_processes(processes: &mut Processes) {
-        log("Sending updated table of processes");
         let processes = &*(processes.lock().unwrap());
-        let registry_event =
-            &RegistryEvent::UPDATE_REGISTERED_PROCESSES(processes.clone()).as_bytes_vec()[..];
 
-        Registry::broadcast_to_all(&processes, registry_event);
+        if processes.len() > 0 {
+            log("Sending updated table of processes");
+            let registry_event =
+                &RegistryEvent::UPDATE_REGISTERED_PROCESSES(processes.clone()).as_bytes_vec()[..];
+
+            Registry::broadcast_to_all(&processes, registry_event);
+        }
     }
 
     fn send_heartbeat(processes: &mut Processes) {
-        log("Sending heartbeat...");
-        let mut dead_processes = vec![];
-
         let processes = &mut processes.lock().unwrap();
 
-        processes.iter().for_each(|(id, addr)| {
-            if Registry::process_is_alive(addr.to_owned()) {
-                log(&format!("Process at {} is alive", addr));
-            } else {
-                log(&format!("Process at {} is dead, removing it...", addr));
-                dead_processes.push(id.clone());
-            }
-        });
+        if processes.len() > 0 {
+            log("Sending heartbeat...");
+            let mut dead_processes = vec![];
 
-        dead_processes.iter().for_each(|&id| {
-            processes.remove(&id);
-        });
+            processes.iter().for_each(|(id, addr)| {
+                if Registry::process_is_alive(addr.to_owned()) {
+                    log(&format!("Process at {} is alive", addr));
+                } else {
+                    log(&format!("Process at {} is dead, removing it...", addr));
+                    dead_processes.push(id.clone());
+                }
+            });
+
+            dead_processes.iter().for_each(|&id| {
+                processes.remove(&id);
+            });
+        }
     }
 }
 

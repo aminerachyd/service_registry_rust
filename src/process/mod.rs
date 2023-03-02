@@ -17,6 +17,7 @@ use crate::{
 
 type Processes = Arc<Mutex<HashMap<u32, String>>>;
 
+#[derive(Debug)]
 pub struct Process {
     id: u32,
     address: String,
@@ -57,13 +58,11 @@ impl Process {
             Process::send_heartbeat(registry_address_clone.to_owned());
         });
 
-        // FIXME not working
         // Periodically send a message to a random process
-        let arc_registered_processes = Arc::clone(&self.registered_processes);
+        let arc_registered_processes = Arc::clone(&mut self.registered_processes);
         thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(2));
+            thread::sleep(Duration::from_secs(5));
             let registered_processes = &*arc_registered_processes.lock().unwrap();
-            dbg!(registered_processes);
 
             if registered_processes.len() > 0 {
                 Process::send_to_random_process(registered_processes);
@@ -75,7 +74,7 @@ impl Process {
             let mut stream = stream.unwrap();
             let data_size = stream.read(&mut buffer).unwrap();
 
-            let arc_registered_processes = Arc::clone(&self.registered_processes);
+            let arc_registered_processes = Arc::clone(&mut self.registered_processes);
             thread::spawn(move || {
                 if data_size > 0 {
                     let event = handle_buffer(buffer, data_size);
@@ -128,8 +127,8 @@ impl Process {
                 RegistryEvent::REGISTERED {
                     registered_processes: update_processes,
                 } => {
-                    let mut local_registered_processes = &*registered_processes.lock().unwrap();
-                    local_registered_processes = &update_processes;
+                    let local_registered_processes = &mut *registered_processes.lock().unwrap();
+                    std::mem::replace(local_registered_processes, update_processes);
                     log(&format!(
                         "Connected to registry, given id: {}\n Registered processes {:?}",
                         std::process::id(),
@@ -137,8 +136,8 @@ impl Process {
                     ));
                 }
                 RegistryEvent::UPDATE_REGISTERED_PROCESSES(update_processes) => {
-                    let mut local_registered_processes = &*registered_processes.lock().unwrap();
-                    local_registered_processes = &update_processes;
+                    let local_registered_processes = &mut *registered_processes.lock().unwrap();
+                    std::mem::replace(local_registered_processes, update_processes);
                     log(&format!(
                         "Updating registered processes: {:?}",
                         local_registered_processes
@@ -155,8 +154,8 @@ impl Process {
             let process_event = process_event.unwrap();
 
             match process_event {
-                ProcessEvent::MESSAGE(msg) => {
-                    log(&format!("Received message: {}", msg));
+                ProcessEvent::MESSAGE { from, msg } => {
+                    log(&format!("Received from {} message: {}", from, msg));
                 }
                 _ => {}
             }
@@ -182,21 +181,32 @@ impl Process {
     }
 
     fn send_to_random_process(processes: &HashMap<u32, String>) {
-        let mut rng = rand::thread_rng();
-        let process_ids: &Vec<u32> = &processes.iter().map(|(k, _)| k.to_owned()).collect();
-        let mut random_index = rng.gen_range((0..process_ids.len()));
+        if processes.len() > 1 {
+            let mut rng = rand::thread_rng();
+            let process_ids: &Vec<u32> = &processes.iter().map(|(k, _)| k.to_owned()).collect();
+            let mut random_index = rng.gen_range((0..process_ids.len()));
 
-        let mut process_id = process_ids.get(random_index).unwrap().to_owned();
+            let mut process_id = process_ids.get(random_index).unwrap().to_owned();
 
-        let self_id = std::process::id();
-        let message_event =
-            &ProcessEvent::MESSAGE(format!("Hello from {}", self_id)).as_bytes_vec()[..];
-        match Process::get_process_addr(process_id, processes) {
-            Some(addr) => {
-                Process::send(&addr, message_event);
+            let self_id = std::process::id();
+
+            while process_id == self_id {
+                random_index = rng.gen_range((0..process_ids.len()));
+                process_id = process_ids.get(random_index).unwrap().to_owned();
             }
-            None => {
-                log(&format!("Process {} doesn't exist", process_id));
+
+            let message_event = &ProcessEvent::MESSAGE {
+                from: self_id,
+                msg: format!("Hello from {}", self_id),
+            }
+            .as_bytes_vec()[..];
+            match Process::get_process_addr(process_id, processes) {
+                Some(addr) => {
+                    Process::send(&addr, message_event);
+                }
+                None => {
+                    log(&format!("Process {} doesn't exist", process_id));
+                }
             }
         }
     }

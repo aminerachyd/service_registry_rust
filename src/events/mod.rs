@@ -10,7 +10,7 @@ pub enum Event {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProcessEvent {
     CONNECT_ON_PORT { id: u32, port: u32 },
-    MESSAGE(String),
+    MESSAGE { from: u32, msg: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
