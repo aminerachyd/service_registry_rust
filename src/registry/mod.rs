@@ -13,8 +13,10 @@ use crate::{
 };
 
 type Processes = Arc<Mutex<HashMap<u32, String>>>;
+type AMu32 = Arc<Mutex<u32>>;
 
 pub struct Registry {
+    last_registered_id: AMu32,
     processes: Processes,
 }
 impl P2PSend for Registry {}
@@ -24,11 +26,12 @@ impl Registry {
     pub fn new() -> Self {
         let processes = HashMap::new();
         Registry {
+            last_registered_id: Arc::new(Mutex::new(0)),
             processes: Arc::new(Mutex::new(processes)),
         }
     }
 
-    pub fn run(self, addr: &String) -> std::io::Result<()> {
+    pub fn run(mut self, addr: &String) -> std::io::Result<()> {
         let listener = TcpListener::bind(addr)?;
         log(&format!("Started registry on {}", addr));
 
@@ -50,6 +53,7 @@ impl Registry {
             let mut buffer = [0u8; 1000];
 
             let processes = Arc::clone(&self.processes);
+            let last_registered_id = Arc::clone(&self.last_registered_id);
 
             thread::spawn(move || {
                 let mut stream = stream.unwrap();
@@ -59,14 +63,16 @@ impl Registry {
                 if data_size > 0 {
                     let event = handle_buffer(buffer, data_size);
 
-                    let processes = &mut *(processes.lock().unwrap());
-
                     match event {
                         Some(Event::ProcessEvent(process_event)) => {
+                            let processes = &mut *(processes.lock().unwrap());
+                            let last_registered_id = &mut *last_registered_id.lock().unwrap();
+
                             Registry::handle_process_event(
                                 peer_addr,
                                 Some(process_event),
                                 processes,
+                                last_registered_id,
                             );
                         }
                         Some(Event::RegistryEvent(_)) => {
@@ -84,6 +90,7 @@ impl Registry {
         process_addr: IpAddr,
         process_event: Option<ProcessEvent>,
         processes: &mut HashMap<u32, String>,
+        last_registered_id: &mut u32,
     ) {
         if process_event.is_none() {
             log("Data is None");
@@ -91,23 +98,36 @@ impl Registry {
             let process_event = process_event.unwrap();
 
             match process_event {
-                ProcessEvent::CONNECT_ON_PORT { id, port } => {
+                ProcessEvent::CONNECT_ON_PORT { port } => {
                     log(&format!("Received CONNECT from {}:{}", process_addr, port));
-                    Registry::register_process(format!("{}:{}", process_addr, port), processes, id);
+                    Registry::register_process(
+                        format!("{}:{}", process_addr, port),
+                        processes,
+                        last_registered_id,
+                    );
                 }
                 _ => {}
             }
         }
     }
 
-    fn register_process(addr: String, processes: &mut HashMap<u32, String>, process_id: u32) {
-        processes.insert(process_id, addr.clone());
+    fn register_process(
+        addr: String,
+        processes: &mut HashMap<u32, String>,
+        last_registered_id: &mut u32,
+    ) {
+        let next_process_id = *last_registered_id + 1;
+
+        processes.insert(next_process_id, addr.clone());
         log(&format!(
             "Registered process {} at id {}",
-            &addr, process_id
+            &addr, next_process_id
         ));
 
+        *last_registered_id = next_process_id;
+
         let registry_event = &RegistryEvent::REGISTERED {
+            given_id: *last_registered_id,
             registered_processes: processes.clone(),
         }
         .as_bytes_vec()[..];

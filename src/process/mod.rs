@@ -16,10 +16,11 @@ use crate::{
 };
 
 type Processes = Arc<Mutex<HashMap<u32, String>>>;
+type AMu32 = Arc<Mutex<u32>>;
 
 #[derive(Debug)]
 pub struct Process {
-    id: u32,
+    id: AMu32,
     address: String,
     port: u32,
     registry_address: String,
@@ -32,7 +33,7 @@ impl Broadcast for Process {}
 impl Process {
     pub fn new() -> Self {
         Process {
-            id: std::process::id(),
+            id: Arc::new(Mutex::new(0)),
             address: String::from(""),
             port: 8080,
             registry_address: String::from(""),
@@ -61,20 +62,26 @@ impl Process {
 
         // Periodically send a message to a random process
         let arc_registered_processes = Arc::clone(&mut self.registered_processes);
+        let arc_self_id = Arc::clone(&self.id);
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(20));
-            let registered_processes = &*arc_registered_processes.lock().unwrap();
 
-            Process::send_to_random_process(registered_processes);
+            let registered_processes = &*arc_registered_processes.lock().unwrap();
+            let self_id = &*arc_self_id.lock().unwrap();
+
+            Process::send_to_random_process(self_id.to_owned(), registered_processes);
         });
 
         // Periodically broadcast a message to all processes
         let arc_registered_processes = Arc::clone(&mut self.registered_processes);
+        let arc_self_id = Arc::clone(&self.id);
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(5));
-            let registered_processes = &*arc_registered_processes.lock().unwrap();
 
-            Process::broadcast_to_processes(registered_processes);
+            let registered_processes = &*arc_registered_processes.lock().unwrap();
+            let self_id = &*arc_self_id.lock().unwrap();
+
+            Process::broadcast_to_processes(self_id.to_owned(), registered_processes);
         });
 
         for stream in listener.incoming() {
@@ -83,6 +90,7 @@ impl Process {
             let data_size = stream.read(&mut buffer).unwrap();
 
             let arc_registered_processes = Arc::clone(&mut self.registered_processes);
+            let arc_self_id = Arc::clone(&self.id);
             thread::spawn(move || {
                 if data_size > 0 {
                     let event = handle_buffer(buffer, data_size);
@@ -93,6 +101,7 @@ impl Process {
                         }
                         Some(Event::RegistryEvent(registry_event)) => {
                             Process::handle_registry_event(
+                                arc_self_id,
                                 arc_registered_processes,
                                 Some(registry_event),
                             );
@@ -109,7 +118,6 @@ impl Process {
     fn connect_to_registry(&self, registry_address: String) {
         log("Connecting to registry...");
         let connect_event = &ProcessEvent::CONNECT_ON_PORT {
-            id: self.id.clone(),
             port: self.port.clone(),
         }
         .as_bytes_vec()[..];
@@ -123,6 +131,7 @@ impl Process {
     }
 
     fn handle_registry_event(
+        self_id: AMu32,
         registered_processes: Processes,
         registry_event: Option<RegistryEvent>,
     ) {
@@ -133,14 +142,18 @@ impl Process {
 
             match registry_event {
                 RegistryEvent::REGISTERED {
+                    given_id,
                     registered_processes: update_processes,
                 } => {
                     let local_registered_processes = &mut *registered_processes.lock().unwrap();
+                    let local_self_id = &mut *self_id.lock().unwrap();
+
                     std::mem::replace(local_registered_processes, update_processes);
+                    std::mem::replace(local_self_id, given_id);
+
                     log(&format!(
                         "Connected to registry, given id: {}\n Registered processes {:?}",
-                        std::process::id(),
-                        local_registered_processes
+                        given_id, local_registered_processes
                     ));
                 }
                 RegistryEvent::UPDATE_REGISTERED_PROCESSES(update_processes) => {
@@ -188,15 +201,13 @@ impl Process {
         }
     }
 
-    fn send_to_random_process(processes: &HashMap<u32, String>) {
+    fn send_to_random_process(self_id: u32, processes: &HashMap<u32, String>) {
         if processes.len() > 1 {
             let mut rng = rand::thread_rng();
             let process_ids: &Vec<u32> = &processes.iter().map(|(k, _)| k.to_owned()).collect();
             let mut random_index = rng.gen_range((0..process_ids.len()));
 
             let mut process_id = process_ids.get(random_index).unwrap().to_owned();
-
-            let self_id = std::process::id();
 
             while process_id == self_id {
                 random_index = rng.gen_range((0..process_ids.len()));
@@ -208,6 +219,7 @@ impl Process {
                 msg: "P2P message".to_owned(),
             }
             .as_bytes_vec()[..];
+
             match Process::get_process_addr(process_id, processes) {
                 Some(addr) => {
                     Process::send(&addr, message_event);
@@ -219,9 +231,8 @@ impl Process {
         }
     }
 
-    fn broadcast_to_processes(processes: &HashMap<u32, String>) {
+    fn broadcast_to_processes(self_id: u32, processes: &HashMap<u32, String>) {
         if processes.len() > 1 {
-            let self_id = std::process::id();
             let processes: HashMap<u32, String> = processes
                 .iter()
                 .filter(|(&k, _)| k != self_id)
@@ -239,5 +250,5 @@ impl Process {
 }
 
 fn log(str: &str) {
-    println!("[Process {}] {}", std::process::id(), str);
+    println!("[Process] {}", str);
 }

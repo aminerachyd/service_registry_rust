@@ -9,13 +9,14 @@ pub enum Event {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProcessEvent {
-    CONNECT_ON_PORT { id: u32, port: u32 },
+    CONNECT_ON_PORT { port: u32 },
     MESSAGE { from: u32, msg: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryEvent {
     REGISTERED {
+        given_id: u32,
         registered_processes: HashMap<u32, String>,
     },
     UPDATE_REGISTERED_PROCESSES(HashMap<u32, String>),
