@@ -11,7 +11,8 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    events::{Event, ProcessEvent, RegistryEvent},
+    algorithms::PaxosAcceptor,
+    events::{Event, PaxosProposerEvent, ProcessEvent, RegistryEvent},
     handle_buffer, Broadcast, P2PSend,
 };
 
@@ -29,6 +30,7 @@ pub struct Process {
 
 impl P2PSend for Process {}
 impl Broadcast for Process {}
+impl PaxosAcceptor for Process {}
 
 impl Process {
     pub fn new() -> Self {
@@ -69,7 +71,10 @@ impl Process {
             let registered_processes = &*arc_registered_processes.lock().unwrap();
             let self_id = &*arc_self_id.lock().unwrap();
 
-            Process::send_to_random_process(self_id.to_owned(), registered_processes);
+            match Process::send_to_random_process(self_id.to_owned(), registered_processes) {
+                Ok(_) => {}
+                Err(_) => {}
+            }
         });
 
         // Periodically broadcast a message to all processes
@@ -81,7 +86,10 @@ impl Process {
             let registered_processes = &*arc_registered_processes.lock().unwrap();
             let self_id = &*arc_self_id.lock().unwrap();
 
-            Process::broadcast_to_processes(self_id.to_owned(), registered_processes);
+            match Process::broadcast_to_processes(self_id.to_owned(), registered_processes) {
+                Ok(_) => {}
+                Err(_) => {}
+            }
         });
 
         for stream in listener.incoming() {
@@ -96,18 +104,23 @@ impl Process {
                     let event = handle_buffer(buffer, data_size);
 
                     match event {
-                        Some(Event::ProcessEvent(process_event)) => {
-                            Process::handle_process_event(Some(process_event));
-                        }
-                        Some(Event::RegistryEvent(registry_event)) => {
-                            Process::handle_registry_event(
-                                arc_self_id,
-                                arc_registered_processes,
-                                Some(registry_event),
-                            );
-                        }
+                        Some(event) => match event {
+                            Event::ProcessEvent(process_event) => {
+                                Process::handle_process_event(Some(process_event));
+                            }
+                            Event::RegistryEvent(registry_event) => {
+                                Process::handle_registry_event(
+                                    arc_self_id,
+                                    arc_registered_processes,
+                                    Some(registry_event),
+                                );
+                            }
+                            Event::PaxosProposerEvent(proposer_event) => {
+                                Process::handle_proposer_event(proposer_event);
+                            }
+                            Event::PaxosAcceptorEvent(_) => {}
+                        },
                         None => {}
-                        _ => {}
                     };
                 }
             });
@@ -117,7 +130,7 @@ impl Process {
 
     fn connect_to_registry(&self, registry_address: String) {
         log("Connecting to registry...");
-        let connect_event = &ProcessEvent::CONNECT_ON_PORT {
+        let connect_event = &ProcessEvent::ConnectOnPort {
             port: self.port.clone(),
         }
         .as_bytes_vec()[..];
@@ -141,24 +154,24 @@ impl Process {
             let registry_event = registry_event.unwrap();
 
             match registry_event {
-                RegistryEvent::REGISTERED {
+                RegistryEvent::Registered {
                     given_id,
                     registered_processes: update_processes,
                 } => {
                     let local_registered_processes = &mut *registered_processes.lock().unwrap();
                     let local_self_id = &mut *self_id.lock().unwrap();
 
-                    std::mem::replace(local_registered_processes, update_processes);
-                    std::mem::replace(local_self_id, given_id);
+                    let _ = std::mem::replace(local_registered_processes, update_processes);
+                    let _ = std::mem::replace(local_self_id, given_id);
 
                     log(&format!(
                         "Connected to registry, given id: {}\n Registered processes {:?}",
                         given_id, local_registered_processes
                     ));
                 }
-                RegistryEvent::UPDATE_REGISTERED_PROCESSES(update_processes) => {
+                RegistryEvent::UpdateRegisteredProcesses(update_processes) => {
                     let local_registered_processes = &mut *registered_processes.lock().unwrap();
-                    std::mem::replace(local_registered_processes, update_processes);
+                    let _ = std::mem::replace(local_registered_processes, update_processes);
                     log(&format!(
                         "Updating registered processes: {:?}",
                         local_registered_processes
@@ -175,12 +188,19 @@ impl Process {
             let process_event = process_event.unwrap();
 
             match process_event {
-                ProcessEvent::MESSAGE { from, msg } => {
+                ProcessEvent::Message { from, msg } => {
                     log(&format!("Received from {}: {}", from, msg));
                 }
                 _ => {}
             }
         }
+    }
+
+    fn handle_proposer_event(proposer_event: PaxosProposerEvent) {
+        log(&format!(
+            "#PAXOS# Received event from proposer {:?}",
+            proposer_event
+        ));
     }
 
     fn send_heartbeat(addr: String) {
@@ -201,37 +221,42 @@ impl Process {
         }
     }
 
-    fn send_to_random_process(self_id: u32, processes: &HashMap<u32, String>) {
+    fn send_to_random_process(
+        self_id: u32,
+        processes: &HashMap<u32, String>,
+    ) -> std::io::Result<usize> {
         if processes.len() > 1 {
             let mut rng = rand::thread_rng();
             let process_ids: &Vec<u32> = &processes.iter().map(|(k, _)| k.to_owned()).collect();
-            let mut random_index = rng.gen_range((0..process_ids.len()));
+            let mut random_index = rng.gen_range(0..process_ids.len());
 
             let mut process_id = process_ids.get(random_index).unwrap().to_owned();
 
             while process_id == self_id {
-                random_index = rng.gen_range((0..process_ids.len()));
+                random_index = rng.gen_range(0..process_ids.len());
                 process_id = process_ids.get(random_index).unwrap().to_owned();
             }
 
-            let message_event = &ProcessEvent::MESSAGE {
+            let message_event = &ProcessEvent::Message {
                 from: self_id,
                 msg: "P2P message".to_owned(),
             }
             .as_bytes_vec()[..];
 
             match Process::get_process_addr(process_id, processes) {
-                Some(addr) => {
-                    Process::send(&addr, message_event);
-                }
-                None => {
-                    log(&format!("Process {} doesn't exist", process_id));
-                }
+                Some(addr) => Process::send(&addr, message_event),
+                None => Err(std::io::ErrorKind::AddrNotAvailable.into()),
             }
+        } else {
+            log("Not enough registered processes to send a message");
+            Err(std::io::ErrorKind::Other.into())
         }
     }
 
-    fn broadcast_to_processes(self_id: u32, processes: &HashMap<u32, String>) {
+    fn broadcast_to_processes(
+        self_id: u32,
+        processes: &HashMap<u32, String>,
+    ) -> std::io::Result<usize> {
         if processes.len() > 1 {
             let processes: HashMap<u32, String> = processes
                 .iter()
@@ -239,12 +264,15 @@ impl Process {
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
                 .collect();
 
-            let broadcast_message = &ProcessEvent::MESSAGE {
+            let broadcast_message = &ProcessEvent::Message {
                 from: self_id,
                 msg: "Broadcast message".to_owned(),
             }
             .as_bytes_vec()[..];
-            Process::broadcast_to_all(&processes, broadcast_message);
+            Process::broadcast_to_all(&processes, broadcast_message)
+        } else {
+            log("Not enough registered processes to broadcast a message");
+            Err(std::io::ErrorKind::Other.into())
         }
     }
 }

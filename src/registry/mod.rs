@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::Read,
+    io::{ErrorKind, Read},
     net::{IpAddr, TcpListener},
     sync::{Arc, Mutex},
     thread,
@@ -8,7 +8,8 @@ use std::{
 };
 
 use crate::{
-    events::{Event, ProcessEvent, RegistryEvent},
+    algorithms::PaxosProposer,
+    events::{Event, PaxosAcceptorEvent, ProcessEvent, RegistryEvent},
     handle_buffer, Broadcast, P2PSend,
 };
 
@@ -21,6 +22,7 @@ pub struct Registry {
 }
 impl P2PSend for Registry {}
 impl Broadcast for Registry {}
+impl PaxosProposer for Registry {}
 
 impl Registry {
     pub fn new() -> Self {
@@ -31,7 +33,7 @@ impl Registry {
         }
     }
 
-    pub fn run(mut self, addr: &String) -> std::io::Result<()> {
+    pub fn run(self, addr: &String) -> std::io::Result<()> {
         let listener = TcpListener::bind(addr)?;
         log(&format!("Started registry on {}", addr));
 
@@ -46,7 +48,17 @@ impl Registry {
         let mut processes = Arc::clone(&self.processes);
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(5));
-            Registry::broadcast_registered_processes(&mut processes);
+            match Registry::broadcast_registered_processes(&mut processes) {
+                Ok(_) => {}
+                Err(_) => {}
+            };
+        });
+
+        // Thread to start paxos consensus instance
+        let processes = Arc::clone(&self.processes);
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(10));
+            Registry::start_consensus_instance(&processes);
         });
 
         for stream in listener.incoming() {
@@ -64,20 +76,25 @@ impl Registry {
                     let event = handle_buffer(buffer, data_size);
 
                     match event {
-                        Some(Event::ProcessEvent(process_event)) => {
-                            let processes = &mut *(processes.lock().unwrap());
-                            let last_registered_id = &mut *last_registered_id.lock().unwrap();
+                        Some(event) => match event {
+                            Event::ProcessEvent(process_event) => {
+                                let processes = &mut *(processes.lock().unwrap());
+                                let last_registered_id = &mut *last_registered_id.lock().unwrap();
 
-                            Registry::handle_process_event(
-                                peer_addr,
-                                Some(process_event),
-                                processes,
-                                last_registered_id,
-                            );
-                        }
-                        Some(Event::RegistryEvent(_)) => {
-                            log("Another registry running ?!");
-                        }
+                                Registry::handle_process_event(
+                                    peer_addr,
+                                    process_event,
+                                    processes,
+                                    last_registered_id,
+                                );
+                            }
+                            Event::PaxosAcceptorEvent(acceptor_event) => {
+                                Registry::handle_acceptor_event(acceptor_event);
+                            }
+                            Event::RegistryEvent(_) | Event::PaxosProposerEvent(_) => {
+                                log("Another registry running ?!");
+                            }
+                        },
                         None => {}
                     };
                 }
@@ -88,27 +105,31 @@ impl Registry {
 
     fn handle_process_event(
         process_addr: IpAddr,
-        process_event: Option<ProcessEvent>,
+        process_event: ProcessEvent,
         processes: &mut HashMap<u32, String>,
         last_registered_id: &mut u32,
     ) {
-        if process_event.is_none() {
-            log("Data is None");
-        } else {
-            let process_event = process_event.unwrap();
-
-            match process_event {
-                ProcessEvent::CONNECT_ON_PORT { port } => {
-                    log(&format!("Received CONNECT from {}:{}", process_addr, port));
-                    Registry::register_process(
-                        format!("{}:{}", process_addr, port),
-                        processes,
-                        last_registered_id,
-                    );
-                }
-                _ => {}
+        match process_event {
+            ProcessEvent::ConnectOnPort { port } => {
+                log(&format!("Received CONNECT from {}:{}", process_addr, port));
+                Registry::register_process(
+                    format!("{}:{}", process_addr, port),
+                    processes,
+                    last_registered_id,
+                );
+            }
+            ProcessEvent::Message { from, msg } => {
+                log(&format!("Received message from process {}: {}", from, msg));
             }
         }
+    }
+
+    // TODO
+    fn handle_acceptor_event(acceptor_event: PaxosAcceptorEvent) {
+        log(&format!(
+            "#PAXOS# Received event from acceptor: {:?}",
+            acceptor_event
+        ));
     }
 
     fn register_process(
@@ -126,7 +147,7 @@ impl Registry {
 
         *last_registered_id = next_process_id;
 
-        let registry_event = &RegistryEvent::REGISTERED {
+        let registry_event = &RegistryEvent::Registered {
             given_id: *last_registered_id,
             registered_processes: processes.clone(),
         }
@@ -140,15 +161,17 @@ impl Registry {
         };
     }
 
-    fn broadcast_registered_processes(processes: &mut Processes) {
+    fn broadcast_registered_processes(processes: &mut Processes) -> std::io::Result<usize> {
         let processes = &*(processes.lock().unwrap());
 
         if processes.len() > 0 {
             log("Sending updated table of processes");
             let registry_event =
-                &RegistryEvent::UPDATE_REGISTERED_PROCESSES(processes.clone()).as_bytes_vec()[..];
+                &RegistryEvent::UpdateRegisteredProcesses(processes.clone()).as_bytes_vec()[..];
 
-            Registry::broadcast_to_all(&processes, registry_event);
+            Registry::broadcast_to_all(&processes, registry_event)
+        } else {
+            Err(ErrorKind::Other.into())
         }
     }
 
@@ -171,6 +194,16 @@ impl Registry {
             dead_processes.iter().for_each(|&id| {
                 processes.remove(&id);
             });
+        }
+    }
+
+    fn start_consensus_instance(processes: &Processes) {
+        let processes = &processes.lock().unwrap();
+        if processes.len() > 2 {
+            log("Starting consensus instance...");
+            Registry::prepare(0, processes);
+        } else {
+            log("Not enough alive processes to start a consensus instance");
         }
     }
 }
