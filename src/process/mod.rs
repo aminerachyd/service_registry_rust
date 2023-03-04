@@ -12,7 +12,7 @@ use rand::Rng;
 
 use crate::{
     algorithms::PaxosAcceptor,
-    events::{Event, PaxosProposerEvent, ProcessEvent, RegistryEvent},
+    events::{Event, PaxosAcceptedValue, PaxosProposerEvent, ProcessEvent, RegistryEvent},
     handle_buffer, Broadcast, P2PSend,
 };
 
@@ -26,6 +26,8 @@ pub struct Process {
     port: u32,
     registry_address: String,
     registered_processes: Processes,
+    paxos_sn: AMu32,
+    paxos_av: Arc<Mutex<Option<PaxosAcceptedValue>>>,
 }
 
 impl P2PSend for Process {}
@@ -40,6 +42,8 @@ impl Process {
             port: 8080,
             registry_address: String::from(""),
             registered_processes: Arc::new(Mutex::new(HashMap::new())),
+            paxos_sn: Arc::new(Mutex::new(0)),
+            paxos_av: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -99,6 +103,8 @@ impl Process {
 
             let arc_registered_processes = Arc::clone(&mut self.registered_processes);
             let arc_self_id = Arc::clone(&self.id);
+            let arc_seq_number = Arc::clone(&self.paxos_sn);
+            let arc_paxos_accepted_value = Arc::clone(&self.paxos_av);
             thread::spawn(move || {
                 if data_size > 0 {
                     let event = handle_buffer(buffer, data_size);
@@ -116,7 +122,11 @@ impl Process {
                                 );
                             }
                             Event::PaxosProposerEvent(proposer_event) => {
-                                Process::handle_proposer_event(proposer_event);
+                                Process::handle_proposer_event(
+                                    arc_paxos_accepted_value,
+                                    arc_seq_number,
+                                    proposer_event,
+                                );
                             }
                             Event::PaxosAcceptorEvent(_) => {}
                         },
@@ -196,11 +206,48 @@ impl Process {
         }
     }
 
-    fn handle_proposer_event(proposer_event: PaxosProposerEvent) {
-        log(&format!(
-            "#PAXOS# Received event from proposer {:?}",
-            proposer_event
-        ));
+    // FIXME fix logic of algorithm
+    // - Has to keep:
+    //      - Sn = sequence number to which the acceptor responded with a promise
+    //      - AV = (Sn,V) last couple that the acceptor accepted
+    // Init : Sn = 0; AV=None
+    fn handle_proposer_event(
+        paxos_accepted_value: Arc<Mutex<Option<PaxosAcceptedValue>>>,
+        local_seq_number: AMu32,
+        proposer_event: PaxosProposerEvent,
+    ) {
+        match proposer_event {
+            PaxosProposerEvent::Prepare { seq_number } => {
+                log(&format!("#PAXOS# Received prepare with id {}", seq_number));
+                let local_seq_number = &mut *local_seq_number.lock().unwrap();
+
+                // FIXME fix logic of algorithm
+                // Promise only if seq_number > Sn
+                if seq_number >= *local_seq_number {
+                    let paxos_accepted_value = &*paxos_accepted_value.lock().unwrap();
+                    Process::promise(1, *paxos_accepted_value, "0.0.0.0:8080".to_owned());
+                    // Update Sn
+                    let _ = std::mem::replace(local_seq_number, seq_number);
+                } else {
+                    // FIXME Invalidate request, send KO
+                }
+            }
+            PaxosProposerEvent::RequestAccept { seq_number, value } => {
+                log(&format!(
+                    "#PAXOS# Received accept with id {} and value {:?}",
+                    seq_number, value
+                ));
+                let local_seq_number = &mut *local_seq_number.lock().unwrap();
+
+                // FIXME fix logic of algorithm
+                // Accept only if seq_number >= Sn
+                if seq_number >= *local_seq_number {
+                    Process::respond_accept(1, Some(value), "0.0.0.0:8080".to_owned());
+                } else {
+                    // TODO Invalidate request, send KO
+                }
+            }
+        }
     }
 
     fn send_heartbeat(addr: String) {

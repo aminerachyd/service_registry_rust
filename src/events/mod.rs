@@ -24,16 +24,33 @@ pub enum RegistryEvent {
     UpdateRegisteredProcesses(HashMap<u32, String>),
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct PaxosAcceptedValue {
+    pub seq_number: u32,
+    pub value: u32,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PaxosProposerEvent {
-    Prepare { proposer_id: u32 },
-    RequestAccept { proposer_id: u32, value: u32 },
+    Prepare {
+        seq_number: u32,
+    },
+    RequestAccept {
+        seq_number: u32,
+        value: PaxosAcceptedValue,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PaxosAcceptorEvent {
-    Promise { proposer_id: u32, value: u32 },
-    Accepted { proposer_id: u32, value: u32 },
+    Promise {
+        seq_number: u32,
+        value: Option<PaxosAcceptedValue>,
+    },
+    Accepted {
+        seq_number: u32,
+        value: Option<PaxosAcceptedValue>,
+    },
 }
 
 impl Event {

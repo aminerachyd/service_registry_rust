@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::events::{PaxosAcceptorEvent, PaxosProposerEvent};
+use crate::events::{PaxosAcceptedValue, PaxosAcceptorEvent, PaxosProposerEvent};
 
 pub trait P2PSend {
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -71,31 +71,39 @@ pub trait Broadcast: P2PSend {
 }
 
 pub trait PaxosProposer: Broadcast {
-    fn prepare(proposer_id: u32, acceptors: &HashMap<u32, String>) -> std::io::Result<usize> {
-        let request = &PaxosProposerEvent::Prepare { proposer_id }.as_bytes_vec()[..];
+    fn prepare(seq_number: u32, acceptors: &HashMap<u32, String>) -> std::io::Result<usize> {
+        let request = &PaxosProposerEvent::Prepare { seq_number }.as_bytes_vec()[..];
 
         Self::broadcast_to_all(acceptors, request)
     }
 
     fn request_accept(
-        proposer_id: u32,
-        value: u32,
+        seq_number: u32,
+        value: PaxosAcceptedValue,
         acceptors: &HashMap<u32, String>,
     ) -> std::io::Result<usize> {
-        let request = &PaxosProposerEvent::RequestAccept { proposer_id, value }.as_bytes_vec()[..];
+        let request = &PaxosProposerEvent::RequestAccept { seq_number, value }.as_bytes_vec()[..];
 
         Self::broadcast_to_all(acceptors, request)
     }
 }
 
 pub trait PaxosAcceptor: P2PSend {
-    fn promise(proposer_id: u32, value: u32, proposer: String) -> std::io::Result<usize> {
-        let request = &PaxosAcceptorEvent::Promise { proposer_id, value }.as_bytes_vec()[..];
+    fn promise(
+        seq_number: u32,
+        value: Option<PaxosAcceptedValue>,
+        proposer: String,
+    ) -> std::io::Result<usize> {
+        let request = &PaxosAcceptorEvent::Promise { seq_number, value }.as_bytes_vec()[..];
 
         Self::send(&proposer, request)
     }
-    fn respond_accept(proposer_id: u32, value: u32, proposer: String) -> std::io::Result<usize> {
-        let request = &PaxosAcceptorEvent::Accepted { proposer_id, value }.as_bytes_vec()[..];
+    fn respond_accept(
+        seq_number: u32,
+        value: Option<PaxosAcceptedValue>,
+        proposer: String,
+    ) -> std::io::Result<usize> {
+        let request = &PaxosAcceptorEvent::Accepted { seq_number, value }.as_bytes_vec()[..];
 
         Self::send(&proposer, request)
     }

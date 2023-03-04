@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     algorithms::PaxosProposer,
-    events::{Event, PaxosAcceptorEvent, ProcessEvent, RegistryEvent},
+    events::{Event, PaxosAcceptedValue, PaxosAcceptorEvent, ProcessEvent, RegistryEvent},
     handle_buffer, Broadcast, P2PSend,
 };
 
@@ -19,6 +19,9 @@ type AMu32 = Arc<Mutex<u32>>;
 pub struct Registry {
     last_registered_id: AMu32,
     processes: Processes,
+    paxos_seq_number: u32,
+    promises_received: AMu32,
+    accepted_values_received: Arc<Mutex<Vec<Option<PaxosAcceptedValue>>>>,
 }
 impl P2PSend for Registry {}
 impl Broadcast for Registry {}
@@ -30,6 +33,9 @@ impl Registry {
         Registry {
             last_registered_id: Arc::new(Mutex::new(0)),
             processes: Arc::new(Mutex::new(processes)),
+            paxos_seq_number: 0,
+            promises_received: Arc::new(Mutex::new(0)),
+            accepted_values_received: Arc::new(vec![].into()),
         }
     }
 
@@ -56,9 +62,10 @@ impl Registry {
 
         // Thread to start paxos consensus instance
         let processes = Arc::clone(&self.processes);
+        let seq_number = self.paxos_seq_number.clone();
         thread::spawn(move || loop {
             thread::sleep(Duration::from_secs(10));
-            Registry::start_consensus_instance(&processes);
+            Registry::start_consensus_instance(seq_number, &processes);
         });
 
         for stream in listener.incoming() {
@@ -66,6 +73,9 @@ impl Registry {
 
             let processes = Arc::clone(&self.processes);
             let last_registered_id = Arc::clone(&self.last_registered_id);
+            let accepted_values_received = Arc::clone(&self.accepted_values_received);
+            let promises_recieved = Arc::clone(&self.promises_received);
+            let self_seq_number = self.paxos_seq_number.clone();
 
             thread::spawn(move || {
                 let mut stream = stream.unwrap();
@@ -89,7 +99,18 @@ impl Registry {
                                 );
                             }
                             Event::PaxosAcceptorEvent(acceptor_event) => {
-                                Registry::handle_acceptor_event(acceptor_event);
+                                let processes = &mut *(processes.lock().unwrap());
+                                let promises_received = &mut *promises_recieved.lock().unwrap();
+                                let accepted_values_received =
+                                    &mut *accepted_values_received.lock().unwrap();
+
+                                Registry::handle_acceptor_event(
+                                    promises_received,
+                                    processes,
+                                    acceptor_event,
+                                    accepted_values_received,
+                                    self_seq_number,
+                                );
                             }
                             Event::RegistryEvent(_) | Event::PaxosProposerEvent(_) => {
                                 log("Another registry running ?!");
@@ -124,12 +145,61 @@ impl Registry {
         }
     }
 
-    // TODO
-    fn handle_acceptor_event(acceptor_event: PaxosAcceptorEvent) {
-        log(&format!(
-            "#PAXOS# Received event from acceptor: {:?}",
-            acceptor_event
-        ));
+    fn handle_acceptor_event(
+        promises_received: &mut u32,
+        acceptors: &HashMap<u32, String>,
+        acceptor_event: PaxosAcceptorEvent,
+        accepted_values_received: &mut Vec<Option<PaxosAcceptedValue>>,
+        self_seq_number: u32,
+    ) {
+        match acceptor_event {
+            PaxosAcceptorEvent::Promise { seq_number, value } => {
+                log(&format!(
+                    "#PAXOS# Received promise with id {} and value: {:?}",
+                    seq_number, value
+                ));
+
+                let _ = std::mem::replace(promises_received, *promises_received + 1);
+                let majority = acceptors.len() / 2 + 1;
+                accepted_values_received.push(value);
+
+                dbg!(&accepted_values_received);
+                // - Broadcast to acceptors, only if we recieved majority of promise
+                if *promises_received > majority as u32 {
+                    let av_with_max_sn = accepted_values_received
+                        .iter()
+                        .filter(|&av| av.is_some())
+                        .map(|av| av.as_ref().unwrap())
+                        .max_by(|av1, av2| av1.seq_number.cmp(&av2.seq_number));
+
+                    // If some AVs are not None, take the value with the biggest Sn
+                    if av_with_max_sn.is_some() {
+                        Registry::request_accept(
+                            seq_number,
+                            av_with_max_sn.unwrap().clone(),
+                            acceptors,
+                        );
+                    } else {
+                        // If all AV are None, propose a value
+                        let av = PaxosAcceptedValue {
+                            seq_number: self_seq_number.clone(),
+                            value: rand::Rng::gen_range(&mut rand::thread_rng(), 100..1000),
+                        };
+
+                        Registry::request_accept(self_seq_number, av, acceptors);
+                    }
+                }
+
+                // If some AV's aren't None, use the one with the biggest seq number
+            }
+            // FIXME fix algorithm
+            PaxosAcceptorEvent::Accepted { seq_number, value } => {
+                log(&format!(
+                    "#PAXOS# Received accepted with id {} and value: {:?}",
+                    seq_number, value
+                ));
+            }
+        }
     }
 
     fn register_process(
@@ -197,11 +267,11 @@ impl Registry {
         }
     }
 
-    fn start_consensus_instance(processes: &Processes) {
+    fn start_consensus_instance(seq_number: u32, processes: &Processes) {
         let processes = &processes.lock().unwrap();
         if processes.len() > 2 {
             log("Starting consensus instance...");
-            Registry::prepare(0, processes);
+            Registry::prepare(seq_number, processes);
         } else {
             log("Not enough alive processes to start a consensus instance");
         }
