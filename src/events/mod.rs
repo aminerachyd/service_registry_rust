@@ -51,6 +51,15 @@ pub enum PaxosAcceptorEvent {
         seq_number: u32,
         value: Option<PaxosAcceptedValue>,
     },
+    KO,
+}
+
+#[derive(Debug)]
+pub enum PaxosStatus {
+    NoConsensus,
+    Phase1,
+    Phase2,
+    ConsensusReached(PaxosAcceptedValue),
 }
 
 impl Event {

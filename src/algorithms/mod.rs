@@ -98,6 +98,12 @@ pub trait PaxosAcceptor: P2PSend {
 
         Self::send(&proposer, request)
     }
+    fn no_promise(proposer: String) -> std::io::Result<usize> {
+        let request = &PaxosAcceptorEvent::KO.as_bytes_vec()[..];
+
+        Self::send(&proposer, request)
+    }
+
     fn respond_accept(
         seq_number: u32,
         value: Option<PaxosAcceptedValue>,

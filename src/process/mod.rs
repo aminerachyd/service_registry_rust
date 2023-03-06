@@ -105,6 +105,7 @@ impl Process {
             let arc_self_id = Arc::clone(&self.id);
             let arc_seq_number = Arc::clone(&self.paxos_sn);
             let arc_paxos_accepted_value = Arc::clone(&self.paxos_av);
+            let proposer_address = self.registry_address.clone();
             thread::spawn(move || {
                 if data_size > 0 {
                     let event = handle_buffer(buffer, data_size);
@@ -126,6 +127,7 @@ impl Process {
                                     arc_paxos_accepted_value,
                                     arc_seq_number,
                                     proposer_event,
+                                    proposer_address,
                                 );
                             }
                             Event::PaxosAcceptorEvent(_) => {}
@@ -215,26 +217,31 @@ impl Process {
         paxos_accepted_value: Arc<Mutex<Option<PaxosAcceptedValue>>>,
         local_seq_number: AMu32,
         proposer_event: PaxosProposerEvent,
+        proposer_address: String,
     ) {
         match proposer_event {
             PaxosProposerEvent::Prepare { seq_number } => {
-                log(&format!("#PAXOS# Received prepare with id {}", seq_number));
+                log(&format!(
+                    "#PAXOS# Received prepare with seq number {}",
+                    seq_number
+                ));
                 let local_seq_number = &mut *local_seq_number.lock().unwrap();
 
                 // FIXME fix logic of algorithm
                 // Promise only if seq_number > Sn
                 if seq_number >= *local_seq_number {
                     let paxos_accepted_value = &*paxos_accepted_value.lock().unwrap();
-                    Process::promise(1, *paxos_accepted_value, "0.0.0.0:8080".to_owned());
+                    Process::promise(seq_number, *paxos_accepted_value, "0.0.0.0:8080".to_owned());
                     // Update Sn
                     let _ = std::mem::replace(local_seq_number, seq_number);
                 } else {
                     // FIXME Invalidate request, send KO
+                    Process::no_promise(proposer_address);
                 }
             }
             PaxosProposerEvent::RequestAccept { seq_number, value } => {
                 log(&format!(
-                    "#PAXOS# Received accept with id {} and value {:?}",
+                    "#PAXOS# Received accept with seq number {} and value {:?}",
                     seq_number, value
                 ));
                 let local_seq_number = &mut *local_seq_number.lock().unwrap();
@@ -242,7 +249,10 @@ impl Process {
                 // FIXME fix logic of algorithm
                 // Accept only if seq_number >= Sn
                 if seq_number >= *local_seq_number {
-                    Process::respond_accept(1, Some(value), "0.0.0.0:8080".to_owned());
+                    let paxos_accepted_value = &mut *paxos_accepted_value.lock().unwrap();
+                    let _ = std::mem::replace(paxos_accepted_value, Some(value));
+
+                    Process::respond_accept(seq_number, *paxos_accepted_value, proposer_address);
                 } else {
                     // TODO Invalidate request, send KO
                 }
