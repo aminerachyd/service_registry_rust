@@ -231,7 +231,7 @@ impl Process {
                 // Promise only if seq_number > Sn
                 if seq_number >= *local_seq_number {
                     let paxos_accepted_value = &*paxos_accepted_value.lock().unwrap();
-                    Process::promise(seq_number, *paxos_accepted_value, "0.0.0.0:8080".to_owned());
+                    Process::promise(seq_number, *paxos_accepted_value, proposer_address);
                     // Update Sn
                     let _ = std::mem::replace(local_seq_number, seq_number);
                 } else {
