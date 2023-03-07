@@ -13,7 +13,8 @@ pub fn start_registry(addr: String) -> std::io::Result<()> {
 }
 
 pub fn start_process(port: u32, registry_address: String) -> std::io::Result<()> {
-    Process::new().run(port, registry_address)
+    let process = Process::new(port, registry_address.clone())?;
+    process.run(port)
 }
 
 fn handle_buffer(buffer: [u8; 1000], data_size: usize) -> Option<Event> {

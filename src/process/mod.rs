@@ -22,7 +22,6 @@ type AMu32 = Arc<Mutex<u32>>;
 #[derive(Debug)]
 pub struct Process {
     id: AMu32,
-    address: String,
     port: u32,
     registry_address: String,
     registered_processes: Processes,
@@ -35,113 +34,94 @@ impl Broadcast for Process {}
 impl PaxosAcceptor for Process {}
 
 impl Process {
-    pub fn new() -> Self {
-        Process {
+    pub fn new(port: u32, registry_address: String) -> std::io::Result<Self> {
+        let _ = TcpListener::bind(format!("0.0.0.0:{}", port))?;
+        Ok(Process {
             id: Arc::new(Mutex::new(0)),
-            address: String::from(""),
-            port: 8080,
-            registry_address: String::from(""),
+            port: port,
+            registry_address: registry_address,
             registered_processes: Arc::new(Mutex::new(HashMap::new())),
             paxos_sn: Arc::new(Mutex::new(0)),
             paxos_av: Arc::new(Mutex::new(None)),
-        }
+        })
     }
 
-    pub fn run(mut self, port: u32, registry_address: String) -> std::io::Result<()> {
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
-        log(&format!("Started process on port {}", port));
-
-        self.address = format!("0.0.0.0:{}", port);
-        self.port = port;
-        self.registry_address = registry_address;
+    pub fn run(&self, port: u32) -> std::io::Result<()> {
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))?;
+        self.log(&format!("Started process on port {}", port));
 
         self.connect_to_registry(self.registry_address.clone());
 
-        let registry_address_clone = self.registry_address.clone();
+        thread::scope(|s| {
+            // Periodically check if the registry is still alive
+            s.spawn(move || loop {
+                thread::sleep(Duration::from_secs(5));
 
-        // Periodically check if the registry is still alive
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(5));
+                self.send_heartbeat_to_registry();
+            });
 
-            Process::send_heartbeat(registry_address_clone.to_owned());
-        });
+            // Periodically send a message to a random process
+            s.spawn(move || loop {
+                thread::sleep(Duration::from_secs(20));
 
-        // Periodically send a message to a random process
-        let arc_registered_processes = Arc::clone(&mut self.registered_processes);
-        let arc_self_id = Arc::clone(&self.id);
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(20));
-
-            let registered_processes = &*arc_registered_processes.lock().unwrap();
-            let self_id = &*arc_self_id.lock().unwrap();
-
-            match Process::send_to_random_process(self_id.to_owned(), registered_processes) {
-                Ok(_) => {}
-                Err(_) => {}
-            }
-        });
-
-        // Periodically broadcast a message to all processes
-        let arc_registered_processes = Arc::clone(&mut self.registered_processes);
-        let arc_self_id = Arc::clone(&self.id);
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(5));
-
-            let registered_processes = &*arc_registered_processes.lock().unwrap();
-            let self_id = &*arc_self_id.lock().unwrap();
-
-            match Process::broadcast_to_processes(self_id.to_owned(), registered_processes) {
-                Ok(_) => {}
-                Err(_) => {}
-            }
-        });
-
-        for stream in listener.incoming() {
-            let mut buffer = [0u8; 1000];
-            let mut stream = stream.unwrap();
-            let data_size = stream.read(&mut buffer).unwrap();
-
-            let arc_registered_processes = Arc::clone(&mut self.registered_processes);
-            let arc_self_id = Arc::clone(&self.id);
-            let arc_seq_number = Arc::clone(&self.paxos_sn);
-            let arc_paxos_accepted_value = Arc::clone(&self.paxos_av);
-            let proposer_address = self.registry_address.clone();
-            thread::spawn(move || {
-                if data_size > 0 {
-                    let event = handle_buffer(buffer, data_size);
-
-                    match event {
-                        Some(event) => match event {
-                            Event::ProcessEvent(process_event) => {
-                                Process::handle_process_event(Some(process_event));
-                            }
-                            Event::RegistryEvent(registry_event) => {
-                                Process::handle_registry_event(
-                                    arc_self_id,
-                                    arc_registered_processes,
-                                    Some(registry_event),
-                                );
-                            }
-                            Event::PaxosProposerEvent(proposer_event) => {
-                                Process::handle_proposer_event(
-                                    arc_paxos_accepted_value,
-                                    arc_seq_number,
-                                    proposer_event,
-                                    proposer_address,
-                                );
-                            }
-                            Event::PaxosAcceptorEvent(_) => {}
-                        },
-                        None => {}
-                    };
+                match self.send_to_random_process() {
+                    Ok(_) => {}
+                    Err(_) => {}
                 }
             });
-        }
+
+            // Periodically broadcast a message to all processes
+            s.spawn(move || loop {
+                thread::sleep(Duration::from_secs(5));
+
+                let registered_processes = self.registered_processes.try_lock();
+                if registered_processes.is_ok() {
+                    match self.broadcast_to_processes(&*registered_processes.unwrap()) {
+                        Ok(_) => {}
+                        Err(_) => {}
+                    }
+                }
+            });
+
+            // Listen for incoming events
+            for stream in listener.incoming() {
+                let mut buffer = [0u8; 1000];
+
+                s.spawn(move || {
+                    let mut stream = stream.unwrap();
+                    let data_size = stream.read(&mut buffer).unwrap();
+
+                    // let proposer_address = self.registry_address.clone();
+                    let proposer_address = "0.0.0.0:8080".to_owned();
+                    if data_size > 0 {
+                        let event = handle_buffer(buffer, data_size);
+
+                        match event {
+                            Some(event) => match event {
+                                Event::ProcessEvent(process_event) => {
+                                    self.handle_process_event(process_event);
+                                }
+                                Event::RegistryEvent(registry_event) => {
+                                    self.handle_registry_event(registry_event);
+                                }
+                                Event::PaxosProposerEvent(proposer_event) => {
+                                    self.handle_proposer_event(proposer_event, proposer_address);
+                                }
+                                Event::PaxosAcceptorEvent(_) => {}
+                            },
+                            None => {
+                                self.log("Received something else");
+                            }
+                        };
+                    }
+                });
+            }
+        });
         Ok(())
     }
 
     fn connect_to_registry(&self, registry_address: String) {
-        log("Connecting to registry...");
+        self.log("Connecting to registry...");
         let connect_event = &ProcessEvent::ConnectOnPort {
             port: self.port.clone(),
         }
@@ -149,42 +129,43 @@ impl Process {
         match Process::send(&registry_address, connect_event) {
             Ok(_) => {}
             _ => {
-                log("Couldn't reach registry, exiting");
+                self.log("Couldn't reach registry, exiting");
                 exit(1);
             }
         }
     }
 
-    fn handle_registry_event(
-        self_id: AMu32,
-        registered_processes: Processes,
-        registry_event: Option<RegistryEvent>,
-    ) {
-        if registry_event.is_none() {
-            log("Data is None");
-        } else {
-            let registry_event = registry_event.unwrap();
+    fn handle_registry_event(&self, registry_event: RegistryEvent) {
+        let self_id = &self.id;
+        let registered_processes = &self.registered_processes;
 
-            match registry_event {
-                RegistryEvent::Registered {
-                    given_id,
-                    registered_processes: update_processes,
-                } => {
-                    let local_registered_processes = &mut *registered_processes.lock().unwrap();
-                    let local_self_id = &mut *self_id.lock().unwrap();
+        match registry_event {
+            RegistryEvent::Registered {
+                given_id,
+                registered_processes: update_processes,
+            } => {
+                let local_registered_processes = registered_processes.try_lock();
+                let local_self_id = self_id.lock();
+                if local_registered_processes.is_ok() && local_self_id.is_ok() {
+                    let local_registered_processes = &mut *local_registered_processes.unwrap();
 
                     let _ = std::mem::replace(local_registered_processes, update_processes);
-                    let _ = std::mem::replace(local_self_id, given_id);
+                    let _ = std::mem::replace(&mut *local_self_id.unwrap(), given_id);
 
-                    log(&format!(
+                    self.log(&format!(
                         "Connected to registry, given id: {}\n Registered processes {:?}",
                         given_id, local_registered_processes
                     ));
                 }
-                RegistryEvent::UpdateRegisteredProcesses(update_processes) => {
-                    let local_registered_processes = &mut *registered_processes.lock().unwrap();
+            }
+            RegistryEvent::UpdateRegisteredProcesses(update_processes) => {
+                let local_registered_processes = registered_processes.try_lock();
+                if local_registered_processes.is_ok() {
+                    let local_registered_processes = &mut *local_registered_processes.unwrap();
+
                     let _ = std::mem::replace(local_registered_processes, update_processes);
-                    log(&format!(
+
+                    self.log(&format!(
                         "Updating registered processes: {:?}",
                         local_registered_processes
                     ));
@@ -193,41 +174,31 @@ impl Process {
         }
     }
 
-    fn handle_process_event(process_event: Option<ProcessEvent>) {
-        if process_event.is_none() {
-            log("Data is None");
-        } else {
-            let process_event = process_event.unwrap();
-
-            match process_event {
-                ProcessEvent::Message { from, msg } => {
-                    log(&format!("Received from {}: {}", from, msg));
-                }
-                _ => {}
+    fn handle_process_event(&self, process_event: ProcessEvent) {
+        match process_event {
+            ProcessEvent::Message { from, msg } => {
+                self.log(&format!("Received from {}: {}", from, msg));
             }
+            _ => {}
         }
     }
 
-    // FIXME fix logic of algorithm
+    // FIXME fix self.logic of algorithm
     // - Has to keep:
     //      - Sn = sequence number to which the acceptor responded with a promise
     //      - AV = (Sn,V) last couple that the acceptor accepted
     // Init : Sn = 0; AV=None
-    fn handle_proposer_event(
-        paxos_accepted_value: Arc<Mutex<Option<PaxosAcceptedValue>>>,
-        local_seq_number: AMu32,
-        proposer_event: PaxosProposerEvent,
-        proposer_address: String,
-    ) {
+    fn handle_proposer_event(&self, proposer_event: PaxosProposerEvent, proposer_address: String) {
+        let local_seq_number = &self.paxos_sn;
+        let paxos_accepted_value = &self.paxos_av;
         match proposer_event {
             PaxosProposerEvent::Prepare { seq_number } => {
-                log(&format!(
+                self.log(&format!(
                     "#PAXOS# Received prepare with seq number {}",
                     seq_number
                 ));
                 let local_seq_number = &mut *local_seq_number.lock().unwrap();
 
-                // FIXME fix logic of algorithm
                 // Promise only if seq_number > Sn
                 if seq_number >= *local_seq_number {
                     let paxos_accepted_value = &*paxos_accepted_value.lock().unwrap();
@@ -235,18 +206,16 @@ impl Process {
                     // Update Sn
                     let _ = std::mem::replace(local_seq_number, seq_number);
                 } else {
-                    // FIXME Invalidate request, send KO
                     Process::no_promise(proposer_address);
                 }
             }
             PaxosProposerEvent::RequestAccept { seq_number, value } => {
-                log(&format!(
+                self.log(&format!(
                     "#PAXOS# Received accept with seq number {} and value {:?}",
                     seq_number, value
                 ));
                 let local_seq_number = &mut *local_seq_number.lock().unwrap();
 
-                // FIXME fix logic of algorithm
                 // Accept only if seq_number >= Sn
                 if seq_number >= *local_seq_number {
                     let paxos_accepted_value = &mut *paxos_accepted_value.lock().unwrap();
@@ -254,19 +223,19 @@ impl Process {
 
                     Process::respond_accept(seq_number, *paxos_accepted_value, proposer_address);
                 } else {
-                    // TODO Invalidate request, send KO
+                    Process::no_promise(proposer_address);
                 }
             }
         }
     }
 
-    fn send_heartbeat(addr: String) {
-        log("Sending heartbeat to registry...");
+    fn send_heartbeat_to_registry(&self) {
+        self.log("Sending heartbeat to registry...");
 
-        if Process::process_is_alive(addr) {
-            log("Registry is alive");
+        if Process::process_is_alive(self.registry_address.to_owned()) {
+            self.log("Registry is alive");
         } else {
-            log("Registry is dead, exiting");
+            self.log("Registry is dead, exiting");
             exit(0);
         }
     }
@@ -278,62 +247,75 @@ impl Process {
         }
     }
 
-    fn send_to_random_process(
-        self_id: u32,
-        processes: &HashMap<u32, String>,
-    ) -> std::io::Result<usize> {
-        if processes.len() > 1 {
-            let mut rng = rand::thread_rng();
-            let process_ids: &Vec<u32> = &processes.iter().map(|(k, _)| k.to_owned()).collect();
-            let mut random_index = rng.gen_range(0..process_ids.len());
+    fn send_to_random_process(&self) -> std::io::Result<usize> {
+        let processes = self.registered_processes.try_lock();
+        let self_id = self.id.try_lock();
+        if processes.is_ok() && self_id.is_ok() {
+            let processes = &mut *processes.unwrap();
+            let self_id = *&self_id.unwrap().to_owned();
 
-            let mut process_id = process_ids.get(random_index).unwrap().to_owned();
+            if processes.len() > 1 {
+                let mut rng = rand::thread_rng();
+                let process_ids: &Vec<u32> = &processes.iter().map(|(k, _)| k.to_owned()).collect();
+                let mut random_index = rng.gen_range(0..process_ids.len());
 
-            while process_id == self_id {
-                random_index = rng.gen_range(0..process_ids.len());
-                process_id = process_ids.get(random_index).unwrap().to_owned();
-            }
+                let mut process_id = process_ids.get(random_index).unwrap().to_owned();
 
-            let message_event = &ProcessEvent::Message {
-                from: self_id,
-                msg: "P2P message".to_owned(),
-            }
-            .as_bytes_vec()[..];
+                while process_id == self_id {
+                    random_index = rng.gen_range(0..process_ids.len());
+                    process_id = process_ids.get(random_index).unwrap().to_owned();
+                }
 
-            match Process::get_process_addr(process_id, processes) {
-                Some(addr) => Process::send(&addr, message_event),
-                None => Err(std::io::ErrorKind::AddrNotAvailable.into()),
+                let message_event = &ProcessEvent::Message {
+                    from: self_id,
+                    msg: "P2P message".to_owned(),
+                }
+                .as_bytes_vec()[..];
+
+                match Process::get_process_addr(process_id, processes) {
+                    Some(addr) => Process::send(&addr, message_event),
+                    None => Err(std::io::ErrorKind::AddrNotAvailable.into()),
+                }
+            } else {
+                self.log("Not enough registered processes to send a message");
+                Err(std::io::ErrorKind::Other.into())
             }
         } else {
-            log("Not enough registered processes to send a message");
+            // Couldn't lock processes and self_id
             Err(std::io::ErrorKind::Other.into())
         }
     }
 
-    fn broadcast_to_processes(
-        self_id: u32,
-        processes: &HashMap<u32, String>,
-    ) -> std::io::Result<usize> {
+    fn broadcast_to_processes(&self, processes: &HashMap<u32, String>) -> std::io::Result<usize> {
         if processes.len() > 1 {
-            let processes: HashMap<u32, String> = processes
-                .iter()
-                .filter(|(&k, _)| k != self_id)
-                .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                .collect();
+            let self_id = self.id.try_lock();
+            if self_id.is_ok() {
+                let self_id = &*self_id.unwrap();
+                let processes: HashMap<u32, String> = processes
+                    .iter()
+                    .filter(|(&k, _)| k != *self_id)
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect();
 
-            let broadcast_message = &ProcessEvent::Message {
-                from: self_id,
-                msg: "Broadcast message".to_owned(),
+                let broadcast_message = &ProcessEvent::Message {
+                    from: *self_id,
+                    msg: "Broadcast message".to_owned(),
+                }
+                .as_bytes_vec()[..];
+                Process::broadcast_to_all(&processes, broadcast_message)
+            } else {
+                // Couldn't lock self_id
+                Err(std::io::ErrorKind::Other.into())
             }
-            .as_bytes_vec()[..];
-            Process::broadcast_to_all(&processes, broadcast_message)
         } else {
-            log("Not enough registered processes to broadcast a message");
+            self.log("Not enough registered processes to broadcast a message");
             Err(std::io::ErrorKind::Other.into())
         }
     }
-}
-
-fn log(str: &str) {
-    println!("[Process] {}", str);
+    fn log(&self, str: &str) {
+        let id = self.id.try_lock();
+        if id.is_ok() {
+            println!("[Process {}] {}", &*id.unwrap(), str);
+        }
+    }
 }
