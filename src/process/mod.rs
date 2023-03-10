@@ -11,7 +11,7 @@ use std::{
 use rand::Rng;
 
 use crate::{
-    algorithms::PaxosAcceptor,
+    algorithms::{Logger, PaxosAcceptor},
     events::{Event, PaxosAcceptedValue, PaxosProposerEvent, ProcessEvent, RegistryEvent},
     handle_buffer, Broadcast, P2PSend,
 };
@@ -312,10 +312,18 @@ impl Process {
             Err(std::io::ErrorKind::Other.into())
         }
     }
-    fn log(&self, str: &str) {
+}
+
+impl Logger for Process {
+    fn what_is_self(&self) -> String {
+        "Process".to_string()
+    }
+    fn what_is_id(&self) -> Option<u32> {
         let id = self.id.try_lock();
         if id.is_ok() {
-            println!("[Process {}] {}", &*id.unwrap(), str);
+            Some(*id.unwrap())
+        } else {
+            None
         }
     }
 }

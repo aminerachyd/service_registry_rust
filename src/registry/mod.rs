@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    algorithms::PaxosProposer,
+    algorithms::{Logger, PaxosProposer},
     events::{
         Event, PaxosAcceptedValue, PaxosAcceptorEvent, PaxosStatus, ProcessEvent, RegistryEvent,
     },
@@ -207,7 +207,6 @@ impl Registry {
                     accepted_values_received.clear();
                 }
             }
-            // FIXME fix algorithm
             (PaxosAcceptorEvent::Accepted { seq_number, value }, PaxosStatus::Phase2) => {
                 self.log(&format!(
                     "#PAXOS# Received accepted with seq number {} and value: {:?}",
@@ -230,7 +229,6 @@ impl Registry {
                     let _ = std::mem::replace(accepted_received, 0);
                 }
             }
-            // FIXME Some polishing
             (PaxosAcceptorEvent::KO, _) => {
                 self.log("#PAXOS# Received KO");
             }
@@ -343,7 +341,13 @@ impl Registry {
             }
         }
     }
-    fn log(&self, str: &str) {
-        println!("[Registry] {}", str);
+}
+
+impl Logger for Registry {
+    fn what_is_self(&self) -> String {
+        "Registry".to_string()
+    }
+    fn what_is_id(&self) -> Option<u32> {
+        None
     }
 }

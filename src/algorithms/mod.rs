@@ -114,3 +114,24 @@ pub trait PaxosAcceptor: P2PSend {
         Self::send(&proposer, request)
     }
 }
+
+pub trait Logger {
+    fn what_is_self(&self) -> String;
+    fn what_is_id(&self) -> Option<u32>;
+
+    fn log(&self, msg: &str) {
+        let id = self.what_is_id();
+        let timestamp = chrono::Local::now().to_string();
+        if id.is_some() {
+            println!(
+                "[{} {} - {}] {}",
+                self.what_is_self(),
+                id.unwrap(),
+                timestamp,
+                msg
+            );
+        } else {
+            println!("[{} - {}] {}", self.what_is_self(), timestamp, msg);
+        }
+    }
+}
