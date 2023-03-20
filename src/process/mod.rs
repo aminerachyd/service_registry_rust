@@ -46,9 +46,9 @@ impl Process {
         })
     }
 
-    pub fn run(&self, port: u32) -> std::io::Result<()> {
+    pub fn run(&self) -> std::io::Result<()> {
         let listener = TcpListener::bind(format!("0.0.0.0:{}", self.port))?;
-        self.log(&format!("Started process on port {}", port));
+        self.log(&format!("Started process on port {}", self.port));
 
         self.connect_to_registry(self.registry_address.clone());
 
@@ -318,6 +318,7 @@ impl Logger for Process {
     fn what_is_self(&self) -> String {
         "Process".to_string()
     }
+
     fn what_is_id(&self) -> Option<u32> {
         let id = self.id.try_lock();
         if id.is_ok() {

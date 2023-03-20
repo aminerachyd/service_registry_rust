@@ -53,9 +53,8 @@ impl Registry {
         thread::scope(|s| {
             // Thread to check all processes if alive and broadcast the processes table
             s.spawn(move || loop {
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(20));
 
-                // let mut processes = Arc::clone(&self.processes);
                 let paxos_status = self.paxos_status.try_lock();
                 if paxos_status.is_ok() {
                     let paxos_status = &mut *paxos_status.unwrap();
@@ -70,7 +69,7 @@ impl Registry {
 
             // Thread to start paxos consensus instance
             s.spawn(move || loop {
-                thread::sleep(Duration::from_secs(7));
+                thread::sleep(Duration::from_secs(10));
                 let paxos_status = self.paxos_status.try_lock();
                 if paxos_status.is_ok() {
                     let paxos_status = &mut *paxos_status.unwrap();
