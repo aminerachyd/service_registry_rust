@@ -91,8 +91,7 @@ impl Process {
                     let mut stream = stream.unwrap();
                     let data_size = stream.read(&mut buffer).unwrap();
 
-                    // let proposer_address = self.registry_address.clone();
-                    let proposer_address = "0.0.0.0:8080".to_owned();
+                    let proposer_address = self.registry_address.clone();
                     if data_size > 0 {
                         let event = handle_buffer(buffer, data_size);
 
